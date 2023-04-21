@@ -1,23 +1,28 @@
 package com.chavesgu.images_picker;
 
+import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+
 import android.Manifest;
 import android.app.Activity;
-import android.content.ContentResolver;
-import android.content.ContentValues;
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.ThumbnailUtils;
-import android.net.Uri;
 import android.os.Build;
-import android.os.Bundle;
-import android.os.Environment;
 import android.os.Handler;
-import android.os.Message;
-import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
+import com.luck.picture.lib.basic.PictureSelectionCameraModel;
+import com.luck.picture.lib.basic.PictureSelectionModel;
+import com.luck.picture.lib.basic.PictureSelector;
+import com.luck.picture.lib.config.SelectMimeType;
+import com.luck.picture.lib.entity.LocalMedia;
+import com.luck.picture.lib.interfaces.OnResultCallbackListener;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -27,18 +32,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
 
-import androidx.annotation.NonNull;
-
-import androidx.annotation.Nullable;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.embedding.engine.plugins.activity.ActivityAware;
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding;
@@ -48,19 +46,6 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
 import io.flutter.plugin.common.PluginRegistry;
 import io.flutter.plugin.common.PluginRegistry.Registrar;
-
-import com.luck.picture.lib.PictureSelectionModel;
-import com.luck.picture.lib.PictureSelector;
-import com.luck.picture.lib.config.PictureConfig;
-import com.luck.picture.lib.config.PictureMimeType;
-import com.luck.picture.lib.entity.LocalMedia;
-import com.luck.picture.lib.language.LanguageConfig;
-import com.luck.picture.lib.listener.OnResultCallbackListener;
-import com.luck.picture.lib.tools.PictureFileUtils;
-
-import static android.app.Activity.RESULT_OK;
-import static android.content.pm.PackageManager.PERMISSION_GRANTED;
-import static java.io.File.separator;
 
 /** ImagesPickerPlugin */
 public class ImagesPickerPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware, PluginRegistry.RequestPermissionsResultListener {
@@ -140,23 +125,25 @@ public class ImagesPickerPlugin implements FlutterPlugin, MethodCallHandler, Act
         int chooseType;
         switch (pickType) {
           case "PickType.video":
-            chooseType = PictureMimeType.ofVideo();
+            chooseType = SelectMimeType.ofVideo();
             break;
           case "PickType.all":
-            chooseType = PictureMimeType.ofAll();
+            chooseType = SelectMimeType.ofAll();
             break;
           default:
-            chooseType = PictureMimeType.ofImage();
+            chooseType = SelectMimeType.ofImage();
             break;
         }
         PictureSelectionModel model = PictureSelector.create(activity)
                 .openGallery(chooseType);
-        Utils.setLanguage(model, language);
-        Utils.setPhotoSelectOpt(model, count, quality);
-        if (cropOption!=null) Utils.setCropOpt(model, cropOption);
+        if (language != null) {
+          model.setLanguage(ImagesPickerUtil.getLanguage( language));
+        }
+        ImagesPickerUtil.setPhotoSelectOpt(model, count, quality);
+        if (cropOption!=null) ImagesPickerUtil.setCropOpt(model, cropOption);
         model.isGif(supportGif);
-        model.videoMaxSecond(maxTime);
-        resolveMedias(model);
+        model.setFilterVideoMaxSecond(maxTime);
+        model.forResult(res);
         break;
       }
       case "openCamera": {
@@ -166,29 +153,31 @@ public class ImagesPickerPlugin implements FlutterPlugin, MethodCallHandler, Act
         HashMap<String, Object> cropOption = call.argument("cropOption");
         String language = call.argument("language");
 
-        int chooseType = PictureMimeType.ofVideo();
+        int chooseType = SelectMimeType.ofVideo();
         switch (pickType) {
           case "PickType.image":
-            chooseType = PictureMimeType.ofImage();
+            chooseType = SelectMimeType.ofImage();
             break;
           default:
-            chooseType = PictureMimeType.ofVideo();
+            chooseType = SelectMimeType.ofVideo();
             break;
         }
 
-        PictureSelectionModel model = PictureSelector.create(activity)
+        PictureSelectionCameraModel model = PictureSelector.create(activity)
                 .openCamera(chooseType);
-        model.setOutputCameraPath(context.getExternalCacheDir().getAbsolutePath());
+        model.setOutputCameraDir(context.getExternalCacheDir().getAbsolutePath());
         if (pickType.equals("PickType.image")) {
-          model.cameraFileName("image_picker_camera_"+UUID.randomUUID().toString()+".jpg");
+          model.setOutputCameraImageFileName("image_picker_camera_"+UUID.randomUUID().toString()+".jpg");
         } else {
-          model.cameraFileName("image_picker_camera_"+UUID.randomUUID().toString()+".mp4");
+          model.setOutputCameraVideoFileName("image_picker_camera_"+UUID.randomUUID().toString()+".mp4");
         }
-        model.recordVideoSecond(maxTime);
-        Utils.setLanguage(model, language);
-        Utils.setPhotoSelectOpt(model, 1, quality);
-        if (cropOption!=null) Utils.setCropOpt(model, cropOption);
-        resolveMedias(model);
+        model.setRecordVideoMaxSecond(maxTime);
+        if (language != null) {
+          model.setLanguage(ImagesPickerUtil.getLanguage( language));
+        }
+        ImagesPickerUtil.setCameraOpt(model, 1, quality);
+//        if (cropOption!=null) Utils.setCropOpt(model, cropOption);
+        model.forResult(res);
         break;
       }
       case "saveVideoToAlbum": {
@@ -232,65 +221,58 @@ public class ImagesPickerPlugin implements FlutterPlugin, MethodCallHandler, Act
     }
   }
 
-  private void resolveMedias(PictureSelectionModel model) {
-    model.forResult(new OnResultCallbackListener<LocalMedia>() {
-      @Override
-      public void onResult(final List<LocalMedia> medias) {
-        // 结果回调
-        new Thread() {
-          @Override
-          public void run() {
-            final List<Object> resArr = new ArrayList<Object>();
-            for (LocalMedia media:medias) {
-              HashMap<String, Object> map = new HashMap<String, Object>();
-              String path = media.getPath();
-              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                path = media.getAndroidQToPath();
-              }
-
-//              if (media.isCut()) path = media.getCutPath();
-//              if (media.isCompressed()) path = media.getCompressPath();
-              if (media.getMimeType().contains("image")) {
-                if (media.isCut()) path = media.getCutPath();
-                if (media.isCompressed()) path = media.getCompressPath();
-              }
-//              path = copyToTmp(path);
-              map.put("path", path);
-
-              String thumbPath;
-              if (media.getMimeType().contains("image")) {
-                thumbPath = path;
-              } else {
-                thumbPath = createVideoThumb(path);
-              }
-              map.put("thumbPath", thumbPath);
-
-              int size = getFileSize(path);
-              map.put("size", size);
-
-              Log.i("pick test", map.toString());
-              resArr.add(map);
+  OnResultCallbackListener res = new OnResultCallbackListener<LocalMedia>() {
+    @Override
+    public void onResult(final ArrayList<LocalMedia> medias) {
+      // 结果回调
+      new Thread() {
+        @Override
+        public void run() {
+          final List<Object> resArr = new ArrayList<Object>();
+          for (LocalMedia media:medias) {
+            HashMap<String, Object> map = new HashMap<String, Object>();
+            String path = media.getSandboxPath();
+            if (media.getMimeType().contains("image")) {
+              if (media.isCut()) path = media.getCutPath();
+              if (media.isCompressed()) path = media.getCompressPath();
             }
+//              path = copyToTmp(path);
+            map.put("path", path);
+
+            String thumbPath;
+            if (media.getMimeType().contains("image")) {
+              thumbPath = path;
+            } else {
+              thumbPath = createVideoThumb(path);
+            }
+            map.put("thumbPath", thumbPath);
+
+            int size = getFileSize(path);
+            map.put("size", size);
+
+            Log.i("pick test", map.toString());
+            resArr.add(map);
+          }
 
 //            PictureFileUtils.deleteCacheDirFile(context, type);
 //            PictureFileUtils.deleteAllCacheDirFile(context);
 
-            new Handler(context.getMainLooper()).post(new Runnable() {
-              @Override
-              public void run() {
-                _result.success(resArr);
-              }
-            });
-          }
-        }.start();
-      }
-      @Override
-      public void onCancel() {
-        // 取消
-        _result.success(null);
-      }
-    });
-  }
+          new Handler(context.getMainLooper()).post(new Runnable() {
+            @Override
+            public void run() {
+              _result.success(resArr);
+            }
+          });
+        }
+      }.start();
+    }
+
+    @Override
+    public void onCancel() {
+      // 取消
+      _result.success(null);
+    }
+  };
 
   private String createVideoThumb(String path) {
     Bitmap bitmap = ThumbnailUtils.createVideoThumbnail(path, MediaStore.Video.Thumbnails.FULL_SCREEN_KIND);
